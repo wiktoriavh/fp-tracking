@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { tracking } from "./lib/tracking";
+import { useTracking } from "./lib/useTracking";
 
 export const TrackButton = () => {
   const [author, setName] = useState("");
-  const track = tracking.createAddPendingEvent();
+  const { track } = useTracking();
 
   const handleClick = () => {
     track({
