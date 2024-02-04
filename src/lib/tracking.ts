@@ -1,4 +1,6 @@
-const STORAGE_PARAMERTERS_KEY = "parameters_key";
+import { debounce } from './debounce';
+
+const STORAGE_PARAMETERS_KEY = 'parameters_key';
 
 type QueuedEvent = {
   data: Record<string, string>;
@@ -10,16 +12,14 @@ const createId = () => {
   return Math.random().toString(36).substring(2, 15);
 };
 
-let QUEUE: QueuedEvent[] = [];
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let timeoutId: any = null;
+const QUEUE: QueuedEvent[] = [];
 
 const sendEvent = async (event: Record<string, string>) => {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 1000);
 
   // normally we would use fetch here to send the event to the server
-  console.log("Sending event", event);
+  console.log('Sending event', event);
   clearTimeout(timeoutId);
 };
 
@@ -27,85 +27,64 @@ const processEvent = (event: QueuedEvent) => {
   if (event.isReady) {
     sendEvent(event.data);
   } else {
-    addPendingEvent(event.data, {})(event.data, event.tries);
+    // if the event already went through addPendingEvent once, why send it again? why would it become ready later?
+    addPendingEvent(event.data, { tries: event.tries });
   }
 };
 
-const iterateQueue = async () => {
-  const copiedQueue = [...QUEUE];
-  QUEUE = [];
-  while (copiedQueue.length > 0) {
-    const event = copiedQueue.shift();
-
-    if (!event) {
-      continue;
-    }
-
+// Directly debounce function definition so this logic doesn't need to exist in the queuing function
+const iterateQueue = debounce(async () => {
+  while (QUEUE.length) {
+    const event = QUEUE.shift()!;
     processEvent(event);
   }
-};
+});
 
-const transform = (
-  body: Record<string, string>,
-  data: Record<string, string>,
-  tries: number
-) => {
+// whats the difference between body and data?
+const transform = (data: Record<string, string>, tries: number) => {
   // normally we would validate the event here and set isReady to true if it's valid
+  // if it's not valid, why do we keep it not ready? will it be fixed later?
 
   const event = {
-    data: { ...body, ...data },
+    data,
     isReady: true,
-    tries: tries + 1,
+    tries: tries + 1
   };
 
   return event;
 };
 
-function addPendingEvent(
-  preBody: Record<string, string>,
-  data: Record<string, string>
-) {
-  return (body: Record<string, string>, tries = 0) => {
-    const event = transform({ ...preBody, ...body }, data, tries);
+// use bind for partial application for multiple use cases
+const addPendingEvent = ((...data: Record<string, string | number>[]) => {
+  const { tries, ...eventData } = Object.assign({}, ...data);
+  const event = transform(eventData, tries);
 
-    if (event) {
-      QUEUE.push(event);
-    }
+  if (!event) return;
 
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
+  QUEUE.push(event);
+  iterateQueue();
 
-    timeoutId = setTimeout(() => {
-      iterateQueue();
-    }, 1000);
+  const pendingEvents = JSON.parse(sessionStorage.getItem('pendingEvents') ?? '[]');
 
-    const pendingEvents = JSON.parse(
-      sessionStorage.getItem("pendingEvents") ?? "[]"
-    );
+  pendingEvents.push({
+    event,
+    data
+  });
 
-    pendingEvents.push({
-      event,
-      data,
-    });
+  sessionStorage.setItem('pendingEvents', JSON.stringify(pendingEvents));
+}).bind(this);
 
-    sessionStorage.setItem("pendingEvents", JSON.stringify(pendingEvents));
-  };
-}
-
-const createAddPendingEvent = (event: Record<string, string>) => () => {
+const bindEvents = (event: Record<string, string>) => () => {
   const productId = createId();
   const timestamp = new Date().toISOString();
-  const paymentMethod = ["credit", "paypal", "debit"][
-    Math.floor(Math.random() * 3)
-  ];
+  const paymentMethod = ['credit', 'paypal', 'debit'][Math.floor(Math.random() * 3)];
   const price = String(Math.floor(Math.random() * 1000));
 
-  const passEvent = addPendingEvent(event, {
+  const passEvent = addPendingEvent.bind(event, {
     productId,
     timestamp,
     paymentMethod,
-    price,
+    price
   });
 
   return passEvent;
@@ -113,27 +92,22 @@ const createAddPendingEvent = (event: Record<string, string>) => () => {
 
 const getParemeter = () => {
   const searchParameters = new URLSearchParams(window.location.search);
-  const parameter = Object.fromEntries(searchParameters) as Record<
-    string,
-    string
-  >;
-  const storedParameters = JSON.parse(
-    sessionStorage.getItem(STORAGE_PARAMERTERS_KEY) ?? "{}"
-  );
+  const parameter = Object.fromEntries(searchParameters) as Record<string, string>;
+  const storedParameters = JSON.parse(sessionStorage.getItem(STORAGE_PARAMETERS_KEY) ?? '{}');
 
   return {
     ...parameter,
-    ...storedParameters,
+    ...storedParameters
   };
 };
 
 const getUserId = () => {
-  const id = sessionStorage.getItem("visitorId");
+  const id = sessionStorage.getItem('visitorId');
   if (id) {
     return id;
   }
   const userId = createId();
-  sessionStorage.setItem("userId", userId);
+  sessionStorage.setItem('userId', userId);
   return userId;
 };
 
@@ -141,14 +115,14 @@ const initTracking = () => {
   const PARAMETERS = getParemeter();
   const USER_ID = getUserId();
 
-  sessionStorage.setItem(STORAGE_PARAMERTERS_KEY, JSON.stringify(PARAMETERS));
+  sessionStorage.setItem(STORAGE_PARAMETERS_KEY, JSON.stringify(PARAMETERS));
 
   const body = {
     ...PARAMETERS,
-    userId: USER_ID,
+    userId: USER_ID
   };
 
-  return { createAddPendingEvent: createAddPendingEvent(body) };
+  return { createEvent: bindEvents(body) };
 };
 
 export const tracking = initTracking();
